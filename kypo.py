@@ -2,7 +2,8 @@ import paramiko
 import getopt
 import sys
 import select
-
+import json
+import requests
 
 # testing subject class
 class TestingSubject:
@@ -49,10 +50,12 @@ class ArachniHost:
 
 # method which prints instructions
 def help():
-    print "Usage: penetration_test.py   -n <NUMBER>"
+    print "Usage: penetration_test.py   -n <NUMBER> -h <SANDBOX_NAME>"
     print "  -n                         specify the number of websites for penetration test"
+    print "  -s                         specify the sandbox name"
+    print "  -h                         output help information"	
     print "Examples: "
-    print "penetration_test.py -n 1"
+    print "penetration_test.py -n 1 -s sandbox_name"
 
 
 # method which checks if the variable is int
@@ -128,10 +131,11 @@ def main():
     number_of_websites = ''
     websites = [None]
     arachni_hosts = [None]
+	sandbox_name = ''
 
     # parse command line options
     try:
-        options = getopt.getopt(sys.argv[1:],"n:", ["number_of_websites"])[0]
+        options = getopt.getopt(sys.argv[1:],"n:h:s:", ["number_of_websites", "help_manual", "sandbox_name"])[0]
     except getopt.GetoptError as err:
         print str(err)
         help()
@@ -139,7 +143,10 @@ def main():
 
     # initialize arguments
     for option in options:
-        if option[0] in '-n':
+	    if option[0] in '-h':
+		    help()
+			sys.exit(1)
+        elif option[0] in '-n':
             number_of_websites = option[1]
             if not int_try_parse(number_of_websites):
                 print "Number cannot be parsed!"
@@ -149,7 +156,9 @@ def main():
                 print "Incorrect number range! Insert number 1-99."
                 help()
                 sys.exit(1)
-        else:
+        elif option[0] in '-s':
+		    sandbox_name = option[1]
+		else:
             print "The option does not exist!"
             help()
             sys.exit(1)
