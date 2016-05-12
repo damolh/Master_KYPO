@@ -18,44 +18,34 @@ session = sessionmaker()
 session.configure(bind=engine)
 s = session()
 
-# testing subject class
-class TestingSubject:
-    test_subject_count = 0
 
-    def __init__(self, website_url, tunneling_method, pivot_server, arachni_host, web_server):
+# testing subject class
+class TestingSubject(Base):
+    __table__ = Table('testing_subject', metadata, autoload=True, schema="pentest")
+
+    def __init__(self, website_url, webserver_hostname, pivot_server, arachni_host, tunneling_method):
         self.website_url = website_url
-        self.tunneling_method = tunneling_method
+        self.tunnel_method = tunneling_method
         self.pivot_server = pivot_server
         self.arachni_host = arachni_host
-        self.web_server = web_server
-        TestingSubject.test_subject_count += 1
-
-    @staticmethod
-    def display_count():
-        print "Total number of testing subjects: %d" % TestingSubject.test_subject_count
+        self.webserver_hostname = webserver_hostname
 
     def display_details(self):
         print "Website url: ", self.website_url
-        print "Tunneling method: ", self.tunneling_method
+        print "Tunneling method: ", self.tunnel_method
         print "Pivot server: ", self.pivot_server
         print "Arachni host: ", self.arachni_host
-        print "Web server: ", self.web_server
+        print "Web server: ", self.webserver_hostname
 
 
 # TestingSubject manager class
 class TestingSubjectManager:
-    def __init__(self, db_connection):
-        TestingSubjectManager.cursor = db_connection.cursor()
-        self.db_connection = db_connection
+    def __init__(self, s):
+        self.s = s
 
     def create_testing_subject(self, testing_subject):
-        TestingSubjectManager.cursor.execute(
-            "INSERT INTO pentest.testing_subject (website_url,webserver_hostname,pivot_server,arachni_host,tunnel_method)"
-            " VALUES (%s, %s, %s, s%, s%)",
-            (testing_subject.website_url, testing_subject.webserver_hostname, testing_subject.pivot_server,
-             testing_subject.arachni_host, testing_subject.tunneling_method,))
-        self.db_connection.commit()
-        TestingSubject.cursor.close()
+        self.s.add(testing_subject)
+        self.s.commit()
 
 
 # Sandbox class
@@ -168,18 +158,13 @@ class ArachniHostManager:
 
 
 # Pivot class
-class PivotServer:
-    pivot_server_count = 0
+class PivotServer(Base):
+    __table__ = Table('pivot_server', metadata, autoload=True, schema="pentest")
 
     def __init__(self, hostname, username, password):
         self.hostname = hostname
         self.username = username
         self.password = password
-        PivotServer.pivot_server_count += 1
-
-    @staticmethod
-    def display_count():
-        print "Total number of pivot servers: %d" % PivotServer.pivot_server_count
 
     def display_details(self):
         print "Hostname: ", self.hostname
@@ -188,16 +173,12 @@ class PivotServer:
 
 # PivotServer manager class
 class PivotServerManager:
-    def __init__(self, db_connection):
-        PivotServerManager.cursor = db_connection.cursor()
-        self.db_connection = db_connection
+    def __init__(self, s):
+        self.s = s
 
     def create_pivot_server(self, pivot_server):
-        PivotServerManager.cursor.execute(
-            "INSERT INTO pentest.pivot_server (hostname,username,password) VALUES (%s, %s, %s)",
-            (pivot_server.hostname, pivot_server.username, pivot_server.password,))
-        self.db_connection.commit()
-        PivotServerManager.cursor.close()
+        s.add(pivot_server)
+        s.commit()
 
 
 # method which prints instructions
@@ -221,8 +202,10 @@ def int_try_parse(value):
 
 
 # method which creates a specified number of websites
-def generate_websites(number_of_websites,websites):
+def generate_websites(number_of_websites):
     websites_counter = 0
+    pivot_server_manager = PivotServerManager(s)
+    testing_subject_manager = TestingSubjectManager(s)
     while websites_counter < int(number_of_websites):
         print "Data for website %s" % (websites_counter + 1)
         print "------------------"
@@ -231,11 +214,14 @@ def generate_websites(number_of_websites,websites):
         pivot_server = raw_input("Pivot server: ").strip('\n')
         pivot_username = raw_input("Pivot user: ").strip('\n')
         web_server = raw_input("Web server: ").strip('\n')
-        test_subject = TestingSubject(website_url, tunneling_method, pivot_server, pivot_username, web_server)
-        websites.append(test_subject)
+        pivot_complete = PivotServer(pivot_server,pivot_username,None)
+        pivot_server_manager.create_pivot_server(pivot_complete)
+        testing_subject = TestingSubject(website_url,web_server,pivot_complete.id,None, tunneling_method)
+        testing_subject_manager.create_testing_subject(testing_subject)
+
         websites_counter += 1
     # remove the first empty object
-    websites.remove(None)
+
 
 # method which creates a specified number of arachni hosts
 def generate_arachni_hosts(number_of_hosts, sandbox_name):
@@ -291,10 +277,7 @@ def generate_arachni_hosts(number_of_hosts, sandbox_name):
             arachni_hosts.append(arachni_host)
 
     arachni_hosts.remove(None)
-    return  arachni_hosts
-
-
-
+    return arachni_hosts
 
 
 # method which displays all the websites which should be tested
@@ -382,23 +365,19 @@ def main():
 
     if not sandbox:
         sandbox = Sandbox(sandbox_name)
-        #sandbox_manager.create_sandbox(sandbox)
+        sandbox_manager.create_sandbox(sandbox)
 
     # generate websites and arachni hosts
-    #generate_websites(number_of_websites,websites)
+    generate_websites(number_of_websites)
     arachni_hosts = generate_arachni_hosts(number_of_websites, sandbox_name)
 
-
-
-
-
     # clear terminal window
-    #sys.stderr.write("\x1b[2J\x1b[H")
+    sys.stderr.write("\x1b[2J\x1b[H")
 
     # print overview
     print "Overall information"
     print "-------------------"
-    #display_websites(websites)
+    display_websites(websites)
     print '\n'
     display_arachni_hosts(arachni_hosts)
     print '\n'
