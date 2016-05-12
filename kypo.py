@@ -4,16 +4,18 @@ import sys
 import select
 import json
 import requests
+import psycopg2
+
 
 # testing subject class
 class TestingSubject:
     test_subject_count = 0
 
-    def __init__(self, website_url, tunneling_method, pivot_server, pivot_username, web_server):
+    def __init__(self, website_url, tunneling_method, pivot_server, arachni_host, web_server):
         self.website_url = website_url
         self.tunneling_method = tunneling_method
         self.pivot_server = pivot_server
-        self.pivot_username = pivot_username
+        self.arachni_host = arachni_host
         self.web_server = web_server
         TestingSubject.test_subject_count += 1
 
@@ -25,8 +27,54 @@ class TestingSubject:
         print "Website url: ", self.website_url
         print "Tunneling method: ", self.tunneling_method
         print "Pivot server: ", self.pivot_server
-        print "Pivot user: ", self.pivot_username
+        print "Arachni host: ", self.arachni_host
         print "Web server: ", self.web_server
+
+
+# TestingSubject manager class
+class TestingSubjectManager:
+    def __init__(self, db_connection):
+        TestingSubjectManager.cursor = db_connection.cursor()
+        self.db_connection = db_connection
+
+    def create_testing_subject(self, testing_subject):
+        TestingSubjectManager.cursor.execute(
+            "INSERT INTO pentest.testing_subject (website_url,webserver_hostname,pivot_server,arachni_host,tunnel_method)"
+            " VALUES (%s, %s, %s, s%, s%)",
+            (testing_subject.website_url, testing_subject.webserver_hostname, testing_subject.pivot_server,
+             testing_subject.arachni_host, testing_subject.tunneling_method,))
+        self.db_connection.commit()
+        TestingSubject.cursor.close()
+
+
+# Sandbox class
+class Sandbox:
+    sandbox_count = 0
+
+    def __init__(self, name):
+        self.name = name
+        Sandbox.sandbox_count += 1
+
+    @staticmethod
+    def display_count():
+        print "Total number of sandboxes: %d" % Sandbox.sandbox_count
+
+    def display_details(self):
+        print "Name: ", self.name
+
+
+# ArachniHost manager class
+class SandboxManager:
+    def __init__(self, db_connection):
+        SandboxManager.cursor = db_connection.cursor()
+        self.db_connection = db_connection
+
+    def create_sandbox(self, sandbox):
+        SandboxManager.cursor.execute(
+            "INSERT INTO pentest.sandbox (name) VALUES (%s)",
+            (sandbox.name,))
+        self.db_connection.commit()
+        SandboxManager.cursor.close()
 
 
 # Arachni host class
@@ -46,6 +94,74 @@ class ArachniHost:
     def display_details(self):
         print "Hostname: ", self.hostname
         print "Username: ", self.username
+
+
+# ArachniHost manager class
+class ArachniHostManager:
+    def __init__(self, db_connection):
+        ArachniHostManager.cursor = db_connection.cursor()
+        self.db_connection = db_connection
+
+    def create_arachni_host(self, arachni_host):
+        ArachniHostManager.cursor.execute("INSERT INTO pentest.arachni_host (hostname,username,password) VALUES (%s, %s, %s)",
+                                            (arachni_host.hostname,arachni_host.username,arachni_host.password,))
+        self.db_connection.commit()
+        ArachniHostManager.cursor.close()
+
+
+# Pentester class
+class Pentester:
+    pentester_count = 0
+
+    def __init__(self, pentester_email):
+        self.pentester_email = pentester_email
+        Pentester.pentester_count += 1
+
+
+# Pentester manager class
+class PentesterManager:
+    def __init__(self, db_connection):
+        PentesterManager.cursor = db_connection.cursor()
+        self.db_connection = db_connection
+
+    def create_pentester(self, pentester):
+        PentesterManager.cursor.execute("INSERT INTO pentest.pentest_user (email) VALUES (%s)",
+                                        (pentester.pentester_email,))
+        self.db_connection.commit()
+        PentesterManager.cursor.close()
+
+
+# Pivot class
+class PivotServer:
+    pivot_server_count = 0
+
+    def __init__(self, hostname, username, password):
+        self.hostname = hostname
+        self.username = username
+        self.password = password
+        PivotServer.pivot_server_count += 1
+
+    @staticmethod
+    def display_count():
+        print "Total number of pivot servers: %d" % PivotServer.pivot_server_count
+
+    def display_details(self):
+        print "Hostname: ", self.hostname
+        print "Username: ", self.username
+
+
+# PivotServer manager class
+class PivotServerManager:
+    def __init__(self, db_connection):
+        PivotServerManager.cursor = db_connection.cursor()
+        self.db_connection = db_connection
+
+    def create_pivot_server(self, pivot_server):
+        PivotServerManager.cursor.execute(
+            "INSERT INTO pentest.pivot_server (hostname,username,password) VALUES (%s, %s, %s)",
+            (pivot_server.hostname, pivot_server.username, pivot_server.password,))
+        self.db_connection.commit()
+        PivotServerManager.cursor.close()
 
 
 # method which prints instructions
@@ -119,7 +235,7 @@ def display_arachni_hosts(arachni_hosts):
 
 def main():
 
-    if not len(sys.argv[1:]):
+    if len(sys.argv[1:]) < 1:
         help()
         sys.exit(1)
 
@@ -131,7 +247,8 @@ def main():
     number_of_websites = ''
     websites = [None]
     arachni_hosts = [None]
-	sandbox_name = ''
+    sandbox_name = ''
+    connection_string = "host='' dbname='' user='' password=''"
 
     # parse command line options
     try:
@@ -143,9 +260,9 @@ def main():
 
     # initialize arguments
     for option in options:
-	    if option[0] in '-h':
-		    help()
-			sys.exit(1)
+        if option[0] in '-h':
+            help()
+            sys.exit(1)
         elif option[0] in '-n':
             number_of_websites = option[1]
             if not int_try_parse(number_of_websites):
@@ -157,11 +274,14 @@ def main():
                 help()
                 sys.exit(1)
         elif option[0] in '-s':
-		    sandbox_name = option[1]
-		else:
+            sandbox_name = option[1]
+        else:
             print "The option does not exist!"
             help()
             sys.exit(1)
+
+    # establish database connection
+    database_connection = psycopg2.connect(connection_string)
 
     # generate websites and arachni hosts
     generate_websites(number_of_websites,websites)
@@ -180,7 +300,12 @@ def main():
 
     # establish connection
     print "[*] Trying to establish connection to " + smn_host + " [*]"
-    establish_connection(smn_host, port, smn_username, smn_password, websites, arachni_hosts)
+    #establish_connection(smn_host, port, smn_username, smn_password, websites, arachni_hosts)
+
+    pentester = PivotServer("kypo.ics.cz","tester","pass123")
+    pentester.display_details()
+    pentester_manager = PivotServerManager(database_connection)
+    pentester_manager.create_pivot_server(pentester)
 
 
 def establish_connection(smn_host, port, smn_username, smn_password, websites, arachni_hosts):
