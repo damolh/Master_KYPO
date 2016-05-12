@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, MetaData, Table
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import random
+import test
 
 # SQL Alchemy mapping
 Base = declarative_base()
@@ -65,6 +66,7 @@ class SandboxManager:
         self.s = s
 
     def create_sandbox(self, sandbox):
+
         rest_url = "http://kypo.ics.muni.cz:5000/scenario/sandbox/load/" + sandbox.name + "/konicek-vizvary.json"
         response = requests.get(rest_url)
         if response.ok:
@@ -180,6 +182,10 @@ class PivotServerManager:
         s.add(pivot_server)
         s.commit()
 
+    def get_pivot_byid(self, pivot_id):
+        pivot_server = self.s.query(PivotServer).filter_by(id=pivot_id).first()
+        return pivot_server
+
 
 # method which prints instructions
 def help():
@@ -203,6 +209,7 @@ def int_try_parse(value):
 
 # method which creates a specified number of websites
 def generate_websites(number_of_websites):
+    websites = [None]
     websites_counter = 0
     pivot_server_manager = PivotServerManager(s)
     testing_subject_manager = TestingSubjectManager(s)
@@ -213,14 +220,18 @@ def generate_websites(number_of_websites):
         tunneling_method = raw_input("Tunneling method: ").strip('\n')
         pivot_server = raw_input("Pivot server: ").strip('\n')
         pivot_username = raw_input("Pivot user: ").strip('\n')
+        pivot_password = raw_input("Pivot password: ").strip('\n')
         web_server = raw_input("Web server: ").strip('\n')
-        pivot_complete = PivotServer(pivot_server,pivot_username,None)
+        pivot_complete = PivotServer(pivot_server,pivot_username,pivot_password)
         pivot_server_manager.create_pivot_server(pivot_complete)
         testing_subject = TestingSubject(website_url,web_server,pivot_complete.id,None, tunneling_method)
         testing_subject_manager.create_testing_subject(testing_subject)
-
+        websites.append(testing_subject)
         websites_counter += 1
+
     # remove the first empty object
+    websites.remove(None)
+    return websites
 
 
 # method which creates a specified number of arachni hosts
@@ -242,7 +253,6 @@ def generate_arachni_hosts(number_of_hosts, sandbox_name):
         arachni_host_manager.create_arachni_host(default_arachni_host, sandbox_name)
         arachni_hosts.append(default_arachni_host)
         hostname = ''
-
 
         for x in range(0, (int(number_of_hosts)-1)):
             arachni_exitst = True
@@ -271,7 +281,6 @@ def generate_arachni_hosts(number_of_hosts, sandbox_name):
                     arachni_exitst = False
             name = default_arachni_host.name + "%d" % host_ip
 
-
             arachni_host = ArachniHost(hostname, default_arachni_host.username, default_arachni_host.password, name)
             arachni_host_manager.create_arachni_host(arachni_host, sandbox_name)
             arachni_hosts.append(arachni_host)
@@ -283,7 +292,6 @@ def generate_arachni_hosts(number_of_hosts, sandbox_name):
 # method which displays all the websites which should be tested
 def display_websites(websites):
     if websites:
-        TestingSubject.display_count()
         for website in websites:
             website.display_details()
     else:
@@ -300,8 +308,20 @@ def display_arachni_hosts(arachni_hosts):
         print "There are no Arachni hosts!"
 
 
-def main():
+# method which gets the current ip of SMN
+def get_smn_ip(sandbox_name):
+    rest_url = "http://kypo.ics.muni.cz:5000/scenario/sandbox/ip/" + sandbox_name
+    response = requests.get(rest_url)
 
+    if response.ok:
+        jData = json.loads(response.content)
+
+        sandbox_ip = jData["ip"]
+
+        return  sandbox_ip
+
+
+def main():
     if len(sys.argv[1:]) < 1:
         help()
         sys.exit(1)
@@ -312,8 +332,6 @@ def main():
     smn_password = ''
     port = 22
     number_of_websites = ''
-    websites = [None]
-
     sandbox_name = ''
     user_email = ''
 
@@ -349,7 +367,8 @@ def main():
             help()
             sys.exit(1)
 
-
+    # generate websites which should be tested
+    websites = generate_websites(number_of_websites)
 
     # check if user already exists if not create a new user
     pentester_manager = PentesterManager(s)
@@ -360,15 +379,16 @@ def main():
         pentester_manager.create_pentester(pentester)
 
     # check if sandbox already exists if not create a new sandbox
-    sandbox_manager = SandboxManager(s)
+    sandbox_manager = test.SandboxManager(s)
     sandbox = sandbox_manager.get_sandbox_byname(sandbox_name)
-
     if not sandbox:
-        sandbox = Sandbox(sandbox_name)
+        sandbox = test.Sandbox(sandbox_name)
         sandbox_manager.create_sandbox(sandbox)
 
-    # generate websites and arachni hosts
-    generate_websites(number_of_websites)
+    # get IP adress of SMN host
+    smn_host = get_smn_ip(sandbox_name)
+
+    # generate arachni hosts
     arachni_hosts = generate_arachni_hosts(number_of_websites, sandbox_name)
 
     # clear terminal window
@@ -382,55 +402,127 @@ def main():
     display_arachni_hosts(arachni_hosts)
     print '\n'
 
-    # establish connection
+    # establish connection to SMN
+    smn_client = establish_smn_connection(smn_host, port, smn_username, smn_password)
+
+    # create empty list for arachni connections
+    arachni_clients = [None]
+
+    # establish connection to all arachni hosts
+    for x in range(0, len(arachni_hosts)):
+        arachni_client = establish_arachni_connection(smn_client, smn_host, arachni_hosts[x],port)
+        arachni_clients.append(arachni_client)
+
+    # remove redundant None option
+    arachni_clients.remove(None)
+
+    # perform penetration test
+    for x in range (0, len(arachni_clients)):
+        perform_test(arachni_clients[x], websites[x],smn_host,smn_client, port)
+
+
+def establish_smn_connection(smn_host, port, smn_username, smn_password):
     print "[*] Trying to establish connection to " + smn_host + " [*]"
-    #establish_connection(smn_host, port, smn_username, smn_password, websites, arachni_hosts)
-
-
-def establish_connection(smn_host, port, smn_username, smn_password, websites, arachni_hosts):
-
     # establish connection to KYPO (SMN)
     try:
         smn_client = paramiko.SSHClient()
+
         smn_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        smn_client.connect(smn_host,port=port,username=smn_username,password=smn_password)
+        smn_client.connect(smn_host, port=port, username=smn_username, password=smn_password)
         print "[*] Connection to " + smn_host + " established [*]"
+        smn_client.exec_command("route add -net 10.10.20.0 gw 172.16.1.3 netmask 255.255.255.0")
+        smn_client.exec_command("route add -net 10.10.10.0 gw 172.16.1.2 netmask 255.255.255.0")
     except paramiko.AuthenticationException:
-        print "[x] Authentication failed when connecting to [x]" + smn_host
+        print "[x] Authentication failed when connecting to " + smn_host + " [x]"
         sys.exit(1)
 
-    # create bridge between SMN host and Arachni host
-    transport = smn_client.get_transport()
-    destination_addr = (arachni_hosts[0].hostname,port)
-    local_addr = (smn_host, port)
-    channel = transport.open_channel("direct-tcpip", destination_addr, local_addr)
+    return smn_client
 
-    print "[*] Trying to establish connection to " + arachni_hosts[0].hostname + " [*]"
+
+def establish_arachni_connection(smn_client, smn_host, arachni_host, port):
+    print "[*] Trying to establish connection to " + arachni_host.hostname + " [*]"
+
+    # create bridge between SMN host and Arachni host
+    # the loop ensures that code tries to connect to host multiple times
+    for i in range(0,1000):
+        while True:
+            try:
+                transport = smn_client.get_transport()
+                destination_addr = (arachni_host.hostname,port)
+                local_addr = (smn_host, port)
+                channel = transport.open_channel("direct-tcpip", destination_addr, local_addr)
+            except Exception:
+                continue
+            break
 
     # establish connection to Arachni host
     try:
         arachni_client = paramiko.SSHClient()
         arachni_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        arachni_client.connect(arachni_hosts[0].hostname, port=port, username=arachni_hosts[0].username, password=arachni_hosts[0].password, sock=channel)
-        print "[*] Connection to " + arachni_hosts[0].hostname + " established [*]"
+        arachni_client.connect(arachni_host.hostname, port=port, username=arachni_host.username, password=arachni_host.password, sock=channel)
+        print "[*] Connection to " + arachni_host.hostname + " established [*]"
     except paramiko.AuthenticationException:
-        print "[x] Authentication failed when connecting to " + arachni_hosts[0].hostname + " [x]"
+        print "[x] Authentication failed when connecting to " + arachni_host.hostname + " [x]"
         sys.exit(1)
 
+    return arachni_client
+
+
+def establish_pivot_connection(smn_client, smn_host, pivot_server, port):
+    print "[*] Trying to establish connection to " + pivot_server.hostname + " [*]"
+
+    # create bridge between SMN host and pivot host
+    # the loop ensures that code tries to connect to host multiple times
+    for i in range(0, 1000):
+        while True:
+            try:
+                transport = smn_client.get_transport()
+                destination_addr = (pivot_server.hostname, port)
+                local_addr = (smn_host, port)
+                channel = transport.open_channel("direct-tcpip", destination_addr, local_addr)
+            except Exception:
+                continue
+            break
+
+    # establish connection to pivot host
+    try:
+        pivot_client = paramiko.SSHClient()
+        pivot_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        pivot_client.connect(pivot_server.hostname, port=port, username=pivot_server.username,
+                               password=pivot_server.password, sock=channel)
+        print "[*] Connection to " + pivot_server.hostname + " established [*]"
+    except paramiko.AuthenticationException:
+        print "[x] Authentication failed when connecting to " + pivot_server.hostname + " [x]"
+        sys.exit(1)
+
+    return pivot_client
+
+
+def perform_test(arachni_client, testing_subject, smn_host, smn_client, port):
     # prepare command to feed scanner
     arachni_command = ''
 
-    if websites[0].tunneling_method == 'vpn':
+    query = s.query(TestingSubject.pivot_server).filter(TestingSubject.website_url == testing_subject.website_url)
+    pivot_id = query.scalar()
+
+    pivot_server_manager = PivotServerManager(s)
+    pivot_server = pivot_server_manager.get_pivot_byid(pivot_id)
+
+    pivot_client = establish_pivot_connection(smn_client,smn_host,pivot_server,port)
+
+    if testing_subject.tunnel_method == 'vpn':
         print "[x] Invalid tunneling method [x]"
         sys.exit(1)
-    elif websites[0].tunneling_method == 'socks':
+    elif testing_subject.tunnel_method == 'socks':
         print "[x] Invalid tunneling method [x]"
         sys.exit(1)
-    elif websites[0].tunneling_method == 'ncat':
-        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni ' + websites[0].website_url + ' --http-proxy ' + websites[0].pivot_server+':8080'
-    elif websites[0].tunneling_method == 'ssh':
-        print "[x] Invalid tunneling method [x]"
-        sys.exit(1)
+    elif testing_subject.tunnel_method == 'ncat':
+        pivot_client.exec_command("ncat --listen --proxy-type http 10.10.20.7 8080 &")
+
+        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni ' + testing_subject.website_url + ' --http-proxy ' + pivot_server.hostname+':8080'
+    elif testing_subject.tunnel_method == 'ssh':
+        stdin, stdout, stderr = pivot_client.exec_command("ssh -L 8080:10.10.20.14:80 pivotserver@10.10.20.7")
+        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni ' + testing_subject.website_url + ' --http-proxy 127.0.0.1:8080'
     else:
         print "[x] Invalid tunneling method [x]"
         sys.exit(1)
@@ -442,6 +534,7 @@ def establish_connection(smn_host, port, smn_username, smn_password, websites, a
             rl, wl, xl = select.select([stdout.channel], [], [], 0.0)
             if len(rl) > 0:
                 print stdout.channel.recv(1024)
+
 
 if __name__ == '__main__':
     main()
