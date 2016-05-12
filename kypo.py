@@ -5,7 +5,17 @@ import select
 import json
 import requests
 import psycopg2
+from sqlalchemy import create_engine, MetaData, Table
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
 
+# SQL Alchemy mapping
+Base = declarative_base()
+engine = create_engine('',echo=False)
+metadata = MetaData(bind=engine)
+session = sessionmaker()
+session.configure(bind=engine)
+s = session()
 
 # testing subject class
 class TestingSubject:
@@ -48,34 +58,36 @@ class TestingSubjectManager:
 
 
 # Sandbox class
-class Sandbox:
-    sandbox_count = 0
+class Sandbox(Base):
+    __table__ = Table('sandbox', metadata, autoload=True, schema="pentest")
 
     def __init__(self, name):
         self.name = name
-        Sandbox.sandbox_count += 1
-
-    @staticmethod
-    def display_count():
-        print "Total number of sandboxes: %d" % Sandbox.sandbox_count
 
     def display_details(self):
         print "Name: ", self.name
 
 
-# ArachniHost manager class
+# Sandbox manager class
 class SandboxManager:
-    def __init__(self, db_connection):
-        SandboxManager.cursor = db_connection.cursor()
-        self.db_connection = db_connection
+    def __init__(self, s):
+        self.s = s
 
     def create_sandbox(self, sandbox):
-        SandboxManager.cursor.execute(
-            "INSERT INTO pentest.sandbox (name) VALUES (%s)",
-            (sandbox.name,))
-        self.db_connection.commit()
-        SandboxManager.cursor.close()
+        rest_url = "https://kypo.ics.muni.cz/proxy/kypo.ics.muni.cz/5000/scenario/sandbox/load/" + sandbox.name + "/konicek-vizvary.json"
+        response = requests.get(rest_url)
+        if response.ok:
+            jData = json.loads(response.content)
 
+            self.s.add(sandbox)
+            self.s.commit()
+        else:
+            response.raise_for_status()
+            sys.exit(1)
+
+    def get_sandbox_byname(self, sandbox_name):
+        sandbox = self.s.query(Sandbox).filter_by(name=sandbox_name).first()
+        return sandbox
 
 # Arachni host class
 class ArachniHost:
@@ -248,7 +260,6 @@ def main():
     websites = [None]
     arachni_hosts = [None]
     sandbox_name = ''
-    connection_string = "host='' dbname='' user='' password=''"
 
     # parse command line options
     try:
@@ -280,9 +291,6 @@ def main():
             help()
             sys.exit(1)
 
-    # establish database connection
-    database_connection = psycopg2.connect(connection_string)
-
     # generate websites and arachni hosts
     generate_websites(number_of_websites,websites)
     generate_arachni_hosts(websites, arachni_hosts)
@@ -301,11 +309,6 @@ def main():
     # establish connection
     print "[*] Trying to establish connection to " + smn_host + " [*]"
     #establish_connection(smn_host, port, smn_username, smn_password, websites, arachni_hosts)
-
-    pentester = PivotServer("kypo.ics.cz","tester","pass123")
-    pentester.display_details()
-    pentester_manager = PivotServerManager(database_connection)
-    pentester_manager.create_pivot_server(pentester)
 
 
 def establish_connection(smn_host, port, smn_username, smn_password, websites, arachni_hosts):
