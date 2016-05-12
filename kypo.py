@@ -9,7 +9,10 @@ from sqlalchemy import create_engine, MetaData, Table
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import random
-import test
+import getpass
+import pickle
+import time
+import re
 
 # SQL Alchemy mapping
 Base = declarative_base()
@@ -24,9 +27,10 @@ s = session()
 class TestingSubject(Base):
     __table__ = Table('testing_subject', metadata, autoload=True, schema="pentest")
 
-    def __init__(self, website_url, webserver_hostname, pivot_server, arachni_host, tunneling_method):
+    def __init__(self, website_url, webserver_hostname, pivot_server, arachni_host, pentester, tunneling_method):
         self.website_url = website_url
         self.tunnel_method = tunneling_method
+        self.pentester = pentester
         self.pivot_server = pivot_server
         self.arachni_host = arachni_host
         self.webserver_hostname = webserver_hostname
@@ -66,7 +70,6 @@ class SandboxManager:
         self.s = s
 
     def create_sandbox(self, sandbox):
-
         rest_url = "http://kypo.ics.muni.cz:5000/scenario/sandbox/load/" + sandbox.name + "/konicek-vizvary.json"
         response = requests.get(rest_url)
         if response.ok:
@@ -76,6 +79,7 @@ class SandboxManager:
             self.s.add(sandbox)
             self.s.commit()
         else:
+            print "[x] Cricital error occured! Sandbox cannot be created [x]"
             response.raise_for_status()
             sys.exit(1)
 
@@ -83,12 +87,17 @@ class SandboxManager:
         rest_url = "http://kypo.ics.muni.cz:5000/scenario/sandbox/delete/" + sandbox.name
         response = requests.get(rest_url)
         if response.ok:
+            print "[*] Sandbox deleted [*]"
             jData = json.loads(response.content)
             print jData
 
             sandbox = self.s.query(Sandbox).filter_by(name=sandbox.name).first()
             self.s.delete(sandbox)
             self.s.commit()
+        else:
+            print "[x] Cricital error occured! Sandbox cannot be deleted [x]"
+            response.raise_for_status()
+            sys.exit(1)
 
     def get_sandbox_byname(self, sandbox_name):
         sandbox = self.s.query(Sandbox).filter_by(name=sandbox_name).first()
@@ -142,6 +151,7 @@ class ArachniHostManager:
             s.add(arachni_host)
             s.commit()
         else:
+            print "[*] Arachni host: " + ArachniHost.hostname + " created [*]"
             rest_url = "http://kypo.ics.muni.cz:5000/scenario/" + sandbox_name + "/host/copy/arachni/" + arachni_host.name + "/" + arachni_host.hostname
             response = requests.get(rest_url)
             if response.ok:
@@ -151,6 +161,7 @@ class ArachniHostManager:
                 self.s.add(arachni_host)
                 self.s.commit()
             else:
+                print "[x] Cricital error occured! Arachni host: " + ArachniHost.hostname + " cannot be created [x]"
                 response.raise_for_status()
                 sys.exit(1)
 
@@ -195,7 +206,7 @@ def help():
     print "  -u                         specify the user email"
     print "  -h                         output help information"	
     print "Examples: "
-    print "penetration_test.py -n 1 -s sandbox_name"
+    print "penetration_test.py -n 1 -s sandbox_name -u user_email@company.com"
 
 
 # method which checks if the variable is int
@@ -207,27 +218,80 @@ def int_try_parse(value):
         return False
 
 
+# verify that pivot has a valid format
+def validate_pivot(pivot_server):
+    error_message = ""
+    if not pivot_server.hostname:
+        error_message += "\nPivot hostname is empty!"
+    if not pivot_server.username:
+        error_message += "\nPivot username is empty!"
+    if not pivot_server.password:
+        error_message += "\nPivot password is empty!"
+    if error_message == "":
+        return True
+    else:
+        print error_message
+        return False
+
+
+
+# verify that testing_subject has a valid format
+def validate_testing_subject(testing_subject):
+    error_message = ""
+    if not testing_subject.webserver_hostname:
+        error_message += "\nWeb server is empty!"
+    if testing_subject.tunnel_method != "ncat" and testing_subject.tunnel_method != "ssh" and testing_subject.tunnel_method != "socks" and testing_subject.tunnel_method != "vpn":
+        print testing_subject.tunnel_method
+        error_message += "\nInvalid tunnel method!"
+    if not testing_subject.website_url:
+        error_message += "\nWeb application URL is empty!"
+    if testing_subject.pivot_server == [None]:
+        error_message += "\nPivot server not set!"
+    elif testing_subject.website_url[:7] != "http://":
+        error_message += "\nWeb application URL is not starting with 'http://'!"
+
+    if error_message == "":
+        return True
+    else:
+        print error_message
+        print "\n"
+        return False
+
+
+# verify that user eamil has a valid format:
+def validate_user_email(user_email):
+    if not re.match(r"^[A-Za-z0-9\.\+_-]+@[A-Za-z0-9\._-]+\.[a-zA-Z]*$", user_email):
+        return False
+    return True
+
 # method which creates a specified number of websites
-def generate_websites(number_of_websites):
+def generate_websites(number_of_websites, pentester_id):
+    isValid = False
     websites = [None]
     websites_counter = 0
     pivot_server_manager = PivotServerManager(s)
     testing_subject_manager = TestingSubjectManager(s)
-    while websites_counter < int(number_of_websites):
-        print "Data for website %s" % (websites_counter + 1)
-        print "------------------"
-        website_url = raw_input("Website url: ").strip('\n')
+    while websites_counter < int(number_of_websites) and isValid is False:
+        print "Data for web application %s" % (websites_counter + 1)
+        print "--------------------------"
+        website_url = raw_input("Web application url: ").strip('\n')
         tunneling_method = raw_input("Tunneling method: ").strip('\n')
         pivot_server = raw_input("Pivot server: ").strip('\n')
         pivot_username = raw_input("Pivot user: ").strip('\n')
-        pivot_password = raw_input("Pivot password: ").strip('\n')
+        pivot_password = getpass.getpass("Pivot password: ").strip('\n')
         web_server = raw_input("Web server: ").strip('\n')
+
         pivot_complete = PivotServer(pivot_server,pivot_username,pivot_password)
-        pivot_server_manager.create_pivot_server(pivot_complete)
-        testing_subject = TestingSubject(website_url,web_server,pivot_complete.id,None, tunneling_method)
-        testing_subject_manager.create_testing_subject(testing_subject)
-        websites.append(testing_subject)
-        websites_counter += 1
+        if validate_pivot(pivot_complete):
+            pivot_server_manager.create_pivot_server(pivot_complete)
+
+        testing_subject = TestingSubject(website_url,web_server,pivot_complete.id,None, pentester_id, tunneling_method)
+        if validate_testing_subject(testing_subject):
+            testing_subject_manager.create_testing_subject(testing_subject)
+            websites.append(testing_subject)
+            websites_counter += 1
+
+
 
     # remove the first empty object
     websites.remove(None)
@@ -270,7 +334,6 @@ def generate_arachni_hosts(number_of_hosts, sandbox_name):
             arachni_hosts.append(arachni_host)
     else:
         for x in range(0, int(number_of_hosts)):
-            print "ble %d" % (x)
             arachni_exitst = True
             while (arachni_exitst):
                 host_ip = random.SystemRandom().randint(0, 255)
@@ -295,7 +358,7 @@ def display_websites(websites):
         for website in websites:
             website.display_details()
     else:
-        print "There are no websites to test!"
+        print "[x] Error occurred. There are no web applications to test [x]"
 
 
 # method which displays all arachni hosts
@@ -305,7 +368,7 @@ def display_arachni_hosts(arachni_hosts):
         for arachni_host in arachni_hosts:
             arachni_host.display_details()
     else:
-        print "There are no Arachni hosts!"
+        print "[x] Error occurred. There are no Arachni hosts [x]"
 
 
 # method which gets the current ip of SMN
@@ -318,7 +381,7 @@ def get_smn_ip(sandbox_name):
 
         sandbox_ip = jData["ip"]
 
-        return  sandbox_ip
+        return sandbox_ip
 
 
 def main():
@@ -350,44 +413,72 @@ def main():
             sys.exit(1)
         elif option[0] in '-u':
             user_email = option[1]
+            if not validate_user_email(user_email):
+                print "User email has invalid format! The general format should be used: username@email.com"
+                print "\n"
+                help()
+                sys.exit(1)
+
         elif option[0] in '-n':
             number_of_websites = option[1]
             if not int_try_parse(number_of_websites):
                 print "Number cannot be parsed!"
+                print "\n"
                 help()
                 sys.exit(1)
             if (int(number_of_websites) < 1) or (int(number_of_websites) > 99):
                 print "Incorrect number range! Insert number 1-99."
+                print "\n"
                 help()
                 sys.exit(1)
         elif option[0] in '-s':
             sandbox_name = option[1]
         else:
             print "The option does not exist!"
+            print "\n"
             help()
             sys.exit(1)
 
-    # generate websites which should be tested
-    websites = generate_websites(number_of_websites)
+    if number_of_websites == 1:
+        print "Insert the data of web application which should be tested!"
+    else:
+        print "Insert the data of web applications which should be tested!"
+
+    print
+
+
 
     # check if user already exists if not create a new user
     pentester_manager = PentesterManager(s)
     pentester = pentester_manager.get_pentester_byemail(user_email)
 
+
+
     if not pentester:
         pentester = Pentester(user_email)
         pentester_manager.create_pentester(pentester)
 
+    pentester_id = pentester.id
+    print pentester_id
+
+    # generate websites which should be tested
+    websites = generate_websites(number_of_websites,pentester_id)
+
     # check if sandbox already exists if not create a new sandbox
-    sandbox_manager = test.SandboxManager(s)
+    sandbox_manager = SandboxManager(s)
     sandbox = sandbox_manager.get_sandbox_byname(sandbox_name)
     if not sandbox:
-        sandbox = test.Sandbox(sandbox_name)
+        print "[*] Sandbox is being initiliazed [*]"
+        sandbox = Sandbox(sandbox_name)
         sandbox_manager.create_sandbox(sandbox)
+        print "[*] Sandbox initialization is complete [*]"
+    else:
+        print "[*] Sandbox is already initialized [*]"
 
     # get IP adress of SMN host
     smn_host = get_smn_ip(sandbox_name)
 
+    print "[*] Arachni hosts are being prepared [*]"
     # generate arachni hosts
     arachni_hosts = generate_arachni_hosts(number_of_websites, sandbox_name)
 
@@ -423,6 +514,7 @@ def main():
 
 def establish_smn_connection(smn_host, port, smn_username, smn_password):
     print "[*] Trying to establish connection to " + smn_host + " [*]"
+
     # establish connection to KYPO (SMN)
     try:
         smn_client = paramiko.SSHClient()
@@ -446,13 +538,18 @@ def establish_arachni_connection(smn_client, smn_host, arachni_host, port):
     # the loop ensures that code tries to connect to host multiple times
     for i in range(0,1000):
         while True:
+
+            if i % 10 == 0:
+                print "[*] Trying to establish connection to " + arachni_host.hostname + " [*]"
             try:
                 transport = smn_client.get_transport()
                 destination_addr = (arachni_host.hostname,port)
                 local_addr = (smn_host, port)
                 channel = transport.open_channel("direct-tcpip", destination_addr, local_addr)
             except Exception:
+                time.sleep(20)
                 continue
+
             break
 
     # establish connection to Arachni host
@@ -475,12 +572,15 @@ def establish_pivot_connection(smn_client, smn_host, pivot_server, port):
     # the loop ensures that code tries to connect to host multiple times
     for i in range(0, 1000):
         while True:
+            if i % 10 == 0:
+                print "[*] Trying to establish connection to " + pivot_server.hostname + " [*]"
             try:
                 transport = smn_client.get_transport()
                 destination_addr = (pivot_server.hostname, port)
                 local_addr = (smn_host, port)
                 channel = transport.open_channel("direct-tcpip", destination_addr, local_addr)
             except Exception:
+                time.sleep(20)
                 continue
             break
 
@@ -502,14 +602,17 @@ def perform_test(arachni_client, testing_subject, smn_host, smn_client, port):
     # prepare command to feed scanner
     arachni_command = ''
 
+
     query = s.query(TestingSubject.pivot_server).filter(TestingSubject.website_url == testing_subject.website_url)
     pivot_id = query.scalar()
 
     pivot_server_manager = PivotServerManager(s)
     pivot_server = pivot_server_manager.get_pivot_byid(pivot_id)
 
+    # establish connection to pivot server
     pivot_client = establish_pivot_connection(smn_client,smn_host,pivot_server,port)
 
+    print "[*] Penetration testing is being initialized [*]"
     if testing_subject.tunnel_method == 'vpn':
         print "[x] Invalid tunneling method [x]"
         sys.exit(1)
@@ -538,3 +641,4 @@ def perform_test(arachni_client, testing_subject, smn_host, smn_client, port):
 
 if __name__ == '__main__':
     main()
+
