@@ -74,10 +74,11 @@ class SandboxManager:
         self.s = s
 
     def create_sandbox(self, sandbox):
-        rest_url = "https://kypo.ics.muni.cz/proxy/kypo.ics.muni.cz/5000/scenario/sandbox/load/" + sandbox.name + "/konicek-vizvary.json"
+        rest_url = "http://kypo.ics.muni.cz:5000/scenario/sandbox/load/" + sandbox.name + "/konicek-vizvary.json"
         response = requests.get(rest_url)
         if response.ok:
             jData = json.loads(response.content)
+            print jData
 
             self.s.add(sandbox)
             self.s.commit()
@@ -85,9 +86,43 @@ class SandboxManager:
             response.raise_for_status()
             sys.exit(1)
 
+    def delete_sandbox(self, sandbox):
+        rest_url = "http://kypo.ics.muni.cz:5000/scenario/sandbox/delete/" + sandbox.name
+        response = requests.get(rest_url)
+        if response.ok:
+            jData = json.loads(response.content)
+            print jData
+
+            sandbox = self.s.query(Sandbox).filter_by(name=sandbox.name).first()
+            self.s.delete(sandbox)
+            self.s.commit()
+
     def get_sandbox_byname(self, sandbox_name):
         sandbox = self.s.query(Sandbox).filter_by(name=sandbox_name).first()
         return sandbox
+
+
+# Pentester class
+class Pentester(Base):
+    __table__ = Table('pentest_user', metadata, autoload=True, schema="pentest")
+
+    def __init__(self, email):
+        self.email = email
+
+
+# Pentester manager class
+class PentesterManager:
+    def __init__(self, s):
+        self.s = s
+
+    def create_pentester(self, pentester):
+        s.add(pentester)
+        s.commit()
+
+    def get_pentester_byemail(self, pentester_email):
+        pentester = self.s.query(Pentester).filter_by(email=pentester_email).first()
+        return pentester
+
 
 # Arachni host class
 class ArachniHost:
@@ -119,28 +154,6 @@ class ArachniHostManager:
                                             (arachni_host.hostname,arachni_host.username,arachni_host.password,))
         self.db_connection.commit()
         ArachniHostManager.cursor.close()
-
-
-# Pentester class
-class Pentester:
-    pentester_count = 0
-
-    def __init__(self, pentester_email):
-        self.pentester_email = pentester_email
-        Pentester.pentester_count += 1
-
-
-# Pentester manager class
-class PentesterManager:
-    def __init__(self, db_connection):
-        PentesterManager.cursor = db_connection.cursor()
-        self.db_connection = db_connection
-
-    def create_pentester(self, pentester):
-        PentesterManager.cursor.execute("INSERT INTO pentest.pentest_user (email) VALUES (%s)",
-                                        (pentester.pentester_email,))
-        self.db_connection.commit()
-        PentesterManager.cursor.close()
 
 
 # Pivot class
@@ -178,9 +191,10 @@ class PivotServerManager:
 
 # method which prints instructions
 def help():
-    print "Usage: penetration_test.py   -n <NUMBER> -h <SANDBOX_NAME>"
+    print "Usage: penetration_test.py   -n <NUMBER> -s <SANDBOX_NAME> -u <USER_EMAIL>"
     print "  -n                         specify the number of websites for penetration test"
     print "  -s                         specify the sandbox name"
+    print "  -u                         specify the user email"
     print "  -h                         output help information"	
     print "Examples: "
     print "penetration_test.py -n 1 -s sandbox_name"
@@ -260,10 +274,11 @@ def main():
     websites = [None]
     arachni_hosts = [None]
     sandbox_name = ''
+    user_email = ''
 
     # parse command line options
     try:
-        options = getopt.getopt(sys.argv[1:],"n:h:s:", ["number_of_websites", "help_manual", "sandbox_name"])[0]
+        options = getopt.getopt(sys.argv[1:],"n:h:s:u:", ["number_of_websites", "help_manual", "sandbox_name", "user_email"])[0]
     except getopt.GetoptError as err:
         print str(err)
         help()
@@ -274,6 +289,8 @@ def main():
         if option[0] in '-h':
             help()
             sys.exit(1)
+        elif option[0] in '-u':
+            user_email = option[1]
         elif option[0] in '-n':
             number_of_websites = option[1]
             if not int_try_parse(number_of_websites):
@@ -290,6 +307,22 @@ def main():
             print "The option does not exist!"
             help()
             sys.exit(1)
+
+    # check if user already exists if not create a new user
+    pentester_manager = PentesterManager(s)
+    pentester = pentester_manager.get_pentester_byemail(user_email)
+
+    if not pentester:
+        pentester = Pentester(user_email)
+        pentester_manager.create_pentester(pentester)
+
+    # check if sandbox already exists if not create a new sandbox
+    sandbox_manager = SandboxManager(s)
+    sandbox = sandbox_manager.get_sandbox_byname(sandbox_name)
+
+    if not sandbox:
+        sandbox = Sandbox(sandbox_name)
+        sandbox_manager.create_sandbox(sandbox)
 
     # generate websites and arachni hosts
     generate_websites(number_of_websites,websites)
@@ -310,7 +343,7 @@ def main():
     print "[*] Trying to establish connection to " + smn_host + " [*]"
     #establish_connection(smn_host, port, smn_username, smn_password, websites, arachni_hosts)
 
-
+    
 def establish_connection(smn_host, port, smn_username, smn_password, websites, arachni_hosts):
 
     # establish connection to KYPO (SMN)
