@@ -8,6 +8,7 @@ import psycopg2
 from sqlalchemy import create_engine, MetaData, Table
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+import random
 
 # SQL Alchemy mapping
 Base = declarative_base()
@@ -125,18 +126,14 @@ class PentesterManager:
 
 
 # Arachni host class
-class ArachniHost:
-    arachni_host_count = 0
+class ArachniHost(Base):
+    __table__ = Table('arachni_host', metadata, autoload=True, schema="pentest")
 
-    def __init__(self, hostname, username, password):
+    def __init__(self, hostname, username, password, name):
         self.hostname = hostname
         self.username = username
         self.password = password
-        ArachniHost.arachni_host_count += 1
-
-    @staticmethod
-    def display_count():
-        print "Total number of Arachni hosts: %d" % ArachniHost.arachni_host_count
+        self.name = name
 
     def display_details(self):
         print "Hostname: ", self.hostname
@@ -145,15 +142,29 @@ class ArachniHost:
 
 # ArachniHost manager class
 class ArachniHostManager:
-    def __init__(self, db_connection):
-        ArachniHostManager.cursor = db_connection.cursor()
-        self.db_connection = db_connection
+    def __init__(self, s):
+        self.s = s
 
-    def create_arachni_host(self, arachni_host):
-        ArachniHostManager.cursor.execute("INSERT INTO pentest.arachni_host (hostname,username,password) VALUES (%s, %s, %s)",
-                                            (arachni_host.hostname,arachni_host.username,arachni_host.password,))
-        self.db_connection.commit()
-        ArachniHostManager.cursor.close()
+    def create_arachni_host(self, arachni_host, sandbox_name):
+        if arachni_host.hostname == "10.10.10.4":
+            s.add(arachni_host)
+            s.commit()
+        else:
+            rest_url = "http://kypo.ics.muni.cz:5000/scenario/" + sandbox_name + "/host/copy/arachni/" + arachni_host.name + "/" + arachni_host.hostname
+            response = requests.get(rest_url)
+            if response.ok:
+                jData = json.loads(response.content)
+                print jData
+
+                self.s.add(arachni_host)
+                self.s.commit()
+            else:
+                response.raise_for_status()
+                sys.exit(1)
+
+    def get_arachni_host_byhostname(self, hostname):
+        arachni_host = self.s.query(ArachniHost).filter_by(hostname=hostname).first()
+        return arachni_host
 
 
 # Pivot class
@@ -226,17 +237,64 @@ def generate_websites(number_of_websites,websites):
     # remove the first empty object
     websites.remove(None)
 
+# method which creates a specified number of arachni hosts
+def generate_arachni_hosts(number_of_hosts, sandbox_name):
+    network_prefix = "10.10.10."
+    hosts = number_of_hosts
+    arachni_hosts = [None]
+    arachni_host_manager = ArachniHostManager(s)
+    default_arachni_host = arachni_host_manager.get_arachni_host_byhostname("10.10.10.4")
 
-# method which creates specified number of arachni hosts
-def generate_arachni_hosts(websites, arachni_hosts):
-    if len(websites) == 1:
-        arachni_host_1 = ArachniHost('10.10.10.4', 'pentester', 'pentest')
-        arachni_hosts.append(arachni_host_1)
+    if (not default_arachni_host) and (int(number_of_hosts) == 1):
+        default_arachni_host = ArachniHost('10.10.10.4', 'pentester', 'pentest', 'arachni')
+        arachni_host_manager.create_arachni_host(default_arachni_host,sandbox_name)
+        arachni_hosts.append(default_arachni_host)
+        arachni_hosts.remove(None)
+        return arachni_hosts
+    elif (not default_arachni_host) and (int(number_of_hosts) > 1):
+        default_arachni_host = ArachniHost('10.10.10.4', 'pentester', 'pentest', 'arachni')
+        arachni_host_manager.create_arachni_host(default_arachni_host, sandbox_name)
+        arachni_hosts.append(default_arachni_host)
+        hostname = ''
+
+
+        for x in range(0, (int(number_of_hosts)-1)):
+            arachni_exitst = True
+            while(arachni_exitst):
+                host_ip = random.SystemRandom().randint(0,255)
+
+                hostname = "10.10.10.%d" % host_ip
+                test_arachni = arachni_host_manager.get_arachni_host_byhostname(hostname)
+                if not test_arachni:
+                    arachni_exitst = False
+            name = default_arachni_host.name + "%d" % host_ip
+
+            arachni_host = ArachniHost(hostname, default_arachni_host.username, default_arachni_host.password, name)
+            arachni_host_manager.create_arachni_host(arachni_host, sandbox_name)
+            arachni_hosts.append(arachni_host)
     else:
-        print "[x] Multiple Arachni hosts not supported [x]"
-        sys.exit(1)
-    # remove the first empty object
+        for x in range(0, int(number_of_hosts)):
+            print "ble %d" % (x)
+            arachni_exitst = True
+            while (arachni_exitst):
+                host_ip = random.SystemRandom().randint(0, 255)
+
+                hostname = "10.10.10.%d" % host_ip
+                test_arachni = arachni_host_manager.get_arachni_host_byhostname(hostname)
+                if not test_arachni:
+                    arachni_exitst = False
+            name = default_arachni_host.name + "%d" % host_ip
+
+
+            arachni_host = ArachniHost(hostname, default_arachni_host.username, default_arachni_host.password, name)
+            arachni_host_manager.create_arachni_host(arachni_host, sandbox_name)
+            arachni_hosts.append(arachni_host)
+
     arachni_hosts.remove(None)
+    return  arachni_hosts
+
+
+
 
 
 # method which displays all the websites which should be tested
@@ -252,7 +310,7 @@ def display_websites(websites):
 # method which displays all arachni hosts
 def display_arachni_hosts(arachni_hosts):
     if arachni_hosts:
-        ArachniHost.display_count()
+
         for arachni_host in arachni_hosts:
             arachni_host.display_details()
     else:
@@ -272,7 +330,7 @@ def main():
     port = 22
     number_of_websites = ''
     websites = [None]
-    arachni_hosts = [None]
+
     sandbox_name = ''
     user_email = ''
 
@@ -308,6 +366,8 @@ def main():
             help()
             sys.exit(1)
 
+
+
     # check if user already exists if not create a new user
     pentester_manager = PentesterManager(s)
     pentester = pentester_manager.get_pentester_byemail(user_email)
@@ -322,19 +382,23 @@ def main():
 
     if not sandbox:
         sandbox = Sandbox(sandbox_name)
-        sandbox_manager.create_sandbox(sandbox)
+        #sandbox_manager.create_sandbox(sandbox)
 
     # generate websites and arachni hosts
-    generate_websites(number_of_websites,websites)
-    generate_arachni_hosts(websites, arachni_hosts)
+    #generate_websites(number_of_websites,websites)
+    arachni_hosts = generate_arachni_hosts(number_of_websites, sandbox_name)
+
+
+
+
 
     # clear terminal window
-    sys.stderr.write("\x1b[2J\x1b[H")
+    #sys.stderr.write("\x1b[2J\x1b[H")
 
     # print overview
     print "Overall information"
     print "-------------------"
-    display_websites(websites)
+    #display_websites(websites)
     print '\n'
     display_arachni_hosts(arachni_hosts)
     print '\n'
@@ -343,7 +407,7 @@ def main():
     print "[*] Trying to establish connection to " + smn_host + " [*]"
     #establish_connection(smn_host, port, smn_username, smn_password, websites, arachni_hosts)
 
-    
+
 def establish_connection(smn_host, port, smn_username, smn_password, websites, arachni_hosts):
 
     # establish connection to KYPO (SMN)
