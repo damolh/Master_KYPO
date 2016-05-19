@@ -13,6 +13,8 @@ import getpass
 import pickle
 import time
 import re
+import datetime
+import multiprocessing
 
 # SQL Alchemy mapping
 Base = declarative_base()
@@ -459,7 +461,6 @@ def main():
         pentester_manager.create_pentester(pentester)
 
     pentester_id = pentester.id
-    print pentester_id
 
     # generate websites which should be tested
     websites = generate_websites(number_of_websites,pentester_id)
@@ -506,10 +507,13 @@ def main():
 
     # remove redundant None option
     arachni_clients.remove(None)
-
+    jobs = []
     # perform penetration test
     for x in range (0, len(arachni_clients)):
         perform_test(arachni_clients[x], websites[x],smn_host,smn_client, port)
+        #p = multiprocessing.Process(target=perform_test, args=(arachni_hosts[x], websites[x], smn_host, smn_client, port,))
+        #jobs.append(p)
+        #p.start()
 
 
 def establish_smn_connection(smn_host, port, smn_username, smn_password):
@@ -532,25 +536,16 @@ def establish_smn_connection(smn_host, port, smn_username, smn_password):
 
 
 def establish_arachni_connection(smn_client, smn_host, arachni_host, port):
-    print "[*] Trying to establish connection to " + arachni_host.hostname + " [*]"
-
-    # create bridge between SMN host and Arachni host
-    # the loop ensures that code tries to connect to host multiple times
-    for i in range(0,1000):
-        while True:
-
-            if i % 10 == 0:
-                print "[*] Trying to establish connection to " + arachni_host.hostname + " [*]"
-            try:
-                transport = smn_client.get_transport()
-                destination_addr = (arachni_host.hostname,port)
-                local_addr = (smn_host, port)
-                channel = transport.open_channel("direct-tcpip", destination_addr, local_addr)
-            except Exception:
-                time.sleep(20)
-                continue
-
-            break
+    while True:
+        print "[*] Trying to establish connection to " + arachni_host.hostname + " [*]"
+        try:
+            transport = smn_client.get_transport()
+            destination_addr = (arachni_host.hostname, port)
+            local_addr = (smn_host, port)
+            channel = transport.open_channel("direct-tcpip", destination_addr, local_addr)
+        except Exception:
+            continue
+        break
 
     # establish connection to Arachni host
     try:
@@ -566,23 +561,16 @@ def establish_arachni_connection(smn_client, smn_host, arachni_host, port):
 
 
 def establish_pivot_connection(smn_client, smn_host, pivot_server, port):
-    print "[*] Trying to establish connection to " + pivot_server.hostname + " [*]"
-
-    # create bridge between SMN host and pivot host
-    # the loop ensures that code tries to connect to host multiple times
-    for i in range(0, 1000):
-        while True:
-            if i % 10 == 0:
-                print "[*] Trying to establish connection to " + pivot_server.hostname + " [*]"
-            try:
-                transport = smn_client.get_transport()
-                destination_addr = (pivot_server.hostname, port)
-                local_addr = (smn_host, port)
-                channel = transport.open_channel("direct-tcpip", destination_addr, local_addr)
-            except Exception:
-                time.sleep(20)
-                continue
-            break
+    while True:
+        print "[*] Trying to establish connection to " + pivot_server.hostname + " [*]"
+        try:
+            transport = smn_client.get_transport()
+            destination_addr = (pivot_server.hostname, port)
+            local_addr = (smn_host, port)
+            channel = transport.open_channel("direct-tcpip", destination_addr, local_addr)
+        except Exception:
+            continue
+        break
 
     # establish connection to pivot host
     try:
@@ -617,20 +605,23 @@ def perform_test(arachni_client, testing_subject, smn_host, smn_client, port):
         print "[x] Invalid tunneling method [x]"
         sys.exit(1)
     elif testing_subject.tunnel_method == 'socks':
-        print "[x] Invalid tunneling method [x]"
-        sys.exit(1)
+        arachni_client.exec_command("echo 'socks5    127.0.0.1:9150' >> /etc/proxychains.conf")
+        arachni_client.exec_command('ssh -fN -o StrictHostKeyChecking=no -D 127.0.0.1:9150 pivotserver@10.10.20.7')
+        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni --checks=xss --scope-page-limit 5 ' + testing_subject.website_url + ' --http-proxy socks5://127.0.0.1:9150'
+
     elif testing_subject.tunnel_method == 'ncat':
         pivot_client.exec_command("ncat --listen --proxy-type http 10.10.20.7 8080 &")
 
-        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni ' + testing_subject.website_url + ' --http-proxy ' + pivot_server.hostname+':8080'
+        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni --checks=xss --scope-page-limit 5 ' + testing_subject.website_url + ' --http-proxy ' + pivot_server.hostname+':8080'
     elif testing_subject.tunnel_method == 'ssh':
-        stdin, stdout, stderr = pivot_client.exec_command("ssh -L 8080:10.10.20.14:80 pivotserver@10.10.20.7")
-        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni ' + testing_subject.website_url + ' --http-proxy 127.0.0.1:8080'
+       arachni_client.exec_command('ssh -fN -o StrictHostKeyChecking=no -L 8080:10.10.20.14:80 pivotserver@10.10.20.7')
+       arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni --checks=xss --scope-page-limit 5 ' + testing_subject.website_url + ' --http-proxy 127.0.0.1:8080'
+
     else:
         print "[x] Invalid tunneling method [x]"
         sys.exit(1)
 
-    stdin, stdout, stderr = arachni_client.exec_command(arachni_command)
+    stdin, stdout, stderr= arachni_client.exec_command(arachni_command)
 
     while not stdout.channel.exit_status_ready():
         if stdout.channel.recv_ready():
@@ -638,7 +629,7 @@ def perform_test(arachni_client, testing_subject, smn_host, smn_client, port):
             if len(rl) > 0:
                 print stdout.channel.recv(1024)
 
-
+				
 if __name__ == '__main__':
     main()
 
