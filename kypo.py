@@ -15,6 +15,10 @@ import time
 import re
 import datetime
 import multiprocessing
+import smtplib
+import Queue
+import threading
+
 
 # SQL Alchemy mapping
 Base = declarative_base()
@@ -52,6 +56,10 @@ class TestingSubjectManager:
 
     def create_testing_subject(self, testing_subject):
         self.s.add(testing_subject)
+        self.s.commit()
+
+    def delete_testing_subject(self, testing_subject):
+        self.s.delete(testing_subject)
         self.s.commit()
 
 
@@ -171,6 +179,10 @@ class ArachniHostManager:
         arachni_host = self.s.query(ArachniHost).filter_by(hostname=hostname).first()
         return arachni_host
 
+    def delete_arachni_host(self, arachni_host):
+        # delete function is not actually implemented in KYPO, so the code removes only database records
+        self.s.delete(arachni_host)
+        self.s.commit()
 
 # Pivot class
 class PivotServer(Base):
@@ -386,6 +398,25 @@ def get_smn_ip(sandbox_name):
         return sandbox_ip
 
 
+# method which sends notification to user that the test is completed
+def send_notification(smtp_server, smtp_username, smtp_password, from_address, to_address):
+    message = "\r\n".join([
+        "From: " + smtp_username,
+        "To: " + to_address,
+        "Subject: KYPO: Penetration test for completed",
+        "",
+        "test started at, test finished at, url was, see attachment"
+    ])
+    try:
+        server_ssl = smtplib.SMTP_SSL(smtp_server, 465)
+        server_ssl.ehlo()
+        server_ssl.login(smtp_username, smtp_password)
+        server_ssl.sendmail(from_address, to_address, message)
+        server_ssl.close()
+        print "email sent"
+    except:
+        print "failed to send mail"
+
 def main():
     if len(sys.argv[1:]) < 1:
         help()
@@ -399,6 +430,11 @@ def main():
     number_of_websites = ''
     sandbox_name = ''
     user_email = ''
+    smtp_server = "smtp.gmail.com"
+    smtp_user = ""
+    smtp_password = ""
+
+
 
     # parse command line options
     try:
@@ -511,10 +547,11 @@ def main():
     # perform penetration test
     for x in range (0, len(arachni_clients)):
         perform_test(arachni_clients[x], websites[x],smn_host,smn_client, port)
+		send_notification(smtp_server, smtp_user, smtp_password, smtp_user, user_email)
         #p = multiprocessing.Process(target=perform_test, args=(arachni_hosts[x], websites[x], smn_host, smn_client, port,))
         #jobs.append(p)
         #p.start()
-
+		
 
 def establish_smn_connection(smn_host, port, smn_username, smn_password):
     print "[*] Trying to establish connection to " + smn_host + " [*]"
@@ -586,10 +623,10 @@ def establish_pivot_connection(smn_client, smn_host, pivot_server, port):
     return pivot_client
 
 
-def perform_test(arachni_client, testing_subject, smn_host, smn_client, port):
+def perform_test(arachni_client, pivot_client, testing_subject, smn_host, smn_client, port):
     # prepare command to feed scanner
     arachni_command = ''
-
+    q.get()
 
     query = s.query(TestingSubject.pivot_server).filter(TestingSubject.website_url == testing_subject.website_url)
     pivot_id = query.scalar()
@@ -621,15 +658,25 @@ def perform_test(arachni_client, testing_subject, smn_host, smn_client, port):
         print "[x] Invalid tunneling method [x]"
         sys.exit(1)
 
+    current_time = datetime.datetime.now().isoformat()
+    log_text_file = "arachni_log_" + testing_subject.website_url[7:] + "_" + current_time + ".log"
+
     stdin, stdout, stderr= arachni_client.exec_command(arachni_command)
 
-    while not stdout.channel.exit_status_ready():
-        if stdout.channel.recv_ready():
-            rl, wl, xl = select.select([stdout.channel], [], [], 0.0)
-            if len(rl) > 0:
-                print stdout.channel.recv(1024)
 
-				
+    net_dump = stdout.readlines()
+    pickle.dump(net_dump, open(log_text_file, 'wb'))
+
+    report_text_file = "arachni_report_" + testing_subject.website_url[7:] + "_" + current_time + ".txt"
+
+    arachni_client.exec_command("Scanner/arachni-1.4-0.5.10/bin/arachni_reporter /home/pentester/*.afr --reporter=txt:outfile=/home/pentester/final_report.txt")
+    time.sleep(2)
+    stdin, stdout, stderr = arachni_client.exec_command('cat /home/pentester/final_report.txt')
+    print "dalsi bod"
+    net_dump2 = stdout.readlines()
+    pickle.dump(net_dump2, open(report_text_file, 'wb'))
+
+
 if __name__ == '__main__':
     main()
 
