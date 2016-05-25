@@ -18,7 +18,7 @@ import threading
 
 # SQL Alchemy mapping
 Base = declarative_base()
-engine = create_engine('',echo=False)
+engine = create_engine('postgresql+psycopg2://pentest_user:<DBPASS>@kypo.ics.muni.cz/pentest',echo=False)
 metadata = MetaData(bind=engine)
 session = sessionmaker()
 session.configure(bind=engine)
@@ -197,7 +197,7 @@ class ArachniHostManager:
         self.s = s
 
     def create_arachni_host(self, arachni_host, sandbox_name):
-        if arachni_host.hostname == "10.10.10.4":
+        if arachni_host.hostname == "10.10.10.5":
             s.add(arachni_host)
             s.commit()
         else:
@@ -308,15 +308,21 @@ def establish_smn_connection(smn_host, port, smn_username, smn_password):
 
 
 def establish_arachni_connection(smn_client, smn_host, arachni_host, port):
+    counter = 0
     while True:
         print "[*] Trying to establish connection to " + arachni_host.hostname + " [*]"
-        time.sleep(15)
+        if counter >= 1:
+            time.sleep(15)
+        elif counter > 15:
+            print "[!] Authentication failed when connecting to " + arachni_host.hostname + " [!]"
+            sys.exit(1)
         try:
             transport = smn_client.get_transport()
             destination_addr = (arachni_host.hostname, port)
             local_addr = (smn_host, port)
             channel = transport.open_channel("direct-tcpip", destination_addr, local_addr)
         except Exception:
+            counter += 1
             continue
         break
 
@@ -334,15 +340,22 @@ def establish_arachni_connection(smn_client, smn_host, arachni_host, port):
 
 
 def establish_pivot_connection(smn_client, smn_host, pivot_server, port):
+    counter = 0
     while True:
         print "[*] Trying to establish connection to " + pivot_server.hostname + " [*]"
-        time.sleep(15)
+        if counter >= 1:
+            time.sleep(15)
+        elif counter > 15:
+            print "[!] Authentication failed when connecting to " + pivot_server.hostname + " [!]"
+            sys.exit(1)
+
         try:
             transport = smn_client.get_transport()
             destination_addr = (pivot_server.hostname, port)
             local_addr = (smn_host, port)
             channel = transport.open_channel("direct-tcpip", destination_addr, local_addr)
         except Exception:
+            counter += 1
             continue
         break
 
@@ -362,9 +375,13 @@ def establish_pivot_connection(smn_client, smn_host, pivot_server, port):
 
 ### Section where is the actual penetration test performed
 
-def perform_test(arachni_client, testing_subject, smn_client, smn_host, port, smtp_server, pentester, q):
+def perform_test(arachni_client, testing_subject, smn_client, smn_host, port, smtp_server, pentester, modules, q):
     # prepare command to feed scanner
     arachni_command = ''
+
+    checks = ""
+    if modules != "":
+        checks = "--checks=" + modules
 
     # get pivot server specific for penetration test
     pivot_server = pivot_server_manager.get_pivot_byid(testing_subject.pivot_server_id)
@@ -386,6 +403,10 @@ def perform_test(arachni_client, testing_subject, smn_client, smn_host, port, sm
     print "[*] Web server hostname being used is '" + web_server.hostname + "' [*]"
     print "[*] Web application URL being scanned is '" + web_application.url + "' [*]"
     print "[*] Tunneling method was set to '" + testing_subject.tunnel_method + "' [*]"
+    if checks == "":
+        print "[*] No modules specified. All checks were loaded [*]"
+    else:
+        print "[*] The following checks were loaded: " + modules + " [*]"
 
     # vpn technique
     if testing_subject.tunnel_method == 'vpn':
@@ -396,17 +417,17 @@ def perform_test(arachni_client, testing_subject, smn_client, smn_host, port, sm
     elif testing_subject.tunnel_method == 'socks':
         arachni_client.exec_command("echo 'socks5    127.0.0.1:9150' >> /etc/proxychains.conf")
         arachni_client.exec_command('ssh -fN -o StrictHostKeyChecking=no -D 127.0.0.1:9150 ' + pivot_server.username + '@' + pivot_server.hostname)
-        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni --checks=xss --scope-page-limit 5 ' + web_application.url + ' --http-proxy socks5://127.0.0.1:9150'
+        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni ' + checks + ' --scope-page-limit 150 ' + web_application.url + ' --http-proxy socks5://127.0.0.1:9150'
 
     # ncat technique
     elif testing_subject.tunnel_method == 'ncat':
         pivot_client.exec_command("ncat --listen --proxy-type http " + pivot_server.hostname + " 8080 &")
-        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni --checks=xss --scope-page-limit 10 ' + web_application.url + ' --http-proxy ' + pivot_server.hostname+':8080'
+        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni ' + checks + ' --scope-page-limit 150 ' + web_application.url + ' --http-proxy ' + pivot_server.hostname+':8080'
 
     # ssh technique
     elif testing_subject.tunnel_method == 'ssh':
-       arachni_client.exec_command('ssh -fN -o StrictHostKeyChecking=no -L 8080:'+ web_server.hostname +':80 ' + pivot_server.username + '@' + pivot_server.hostname)
-       arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni ' + web_application.url + ' --http-proxy 127.0.0.1:8080'
+        arachni_client.exec_command('ssh -fN -o StrictHostKeyChecking=no -L 8080:'+ web_server.hostname +':80 ' + pivot_server.username + '@' + pivot_server.hostname)
+        arachni_command = 'Scanner/arachni-1.4-0.5.10/bin/arachni ' + checks + ' --scope-page-limit 150 ' + web_application.url + ' --http-proxy 127.0.0.1:8080'
 
     else:
         print "[x] Invalid tunneling method [x]"
@@ -458,13 +479,33 @@ def perform_test(arachni_client, testing_subject, smn_client, smn_host, port, sm
 
 # method which prints instructions
 def help():
-    print "Usage: penetration_test.py   -n <NUMBER> -s <SANDBOX_NAME> -u <USER_EMAIL>"
+    print "Usage: penetration_test.py   -n <NUMBER> -s <SANDBOX_NAME> -u <USER_EMAIL> -m <CHECKS>"
     print "  -n                         specify the number of websites for penetration test"
     print "  -s                         specify the sandbox name"
     print "  -u                         specify the user email"
+    print "  -m                         specify the checks (separated by commas without spaces, if not specified all checks are used)"
     print "  -h                         output help information"	
+    print
+    print "[*] are status messages."
+    print "[+] are success messages."
+    print "[!] are warning messages."
+    print "[-] are error messages."
+    print
     print "Examples: "
-    print "penetration_test.py -n 1 -s sandbox_name -u user_email@company.com"
+    print "penetration_test.py -n 2 -s sandbox_name -u user_email@company.com -m xss"
+    print "Web application url: http://kypotesting.com"
+    print "Tunneling method: ssh"
+    print "Pivot server: 10.10.20.7"
+    print "Pivot user: pivotserver"
+    print "Pivot password: pivot"
+    print "Web server: 10.10.20.14"
+    print
+    print "Web application url: http://10.10.20.14"
+    print "Tunneling method: ncat"
+    print "Pivot server: 10.10.20.7"
+    print "Pivot user: pivotserver"
+    print "Pivot password: pivot"
+    print "Web server: 10.10.20.14"
 
 
 # method which checks if the variable is int
@@ -571,30 +612,21 @@ def generate_testing_subjects(number_of_websites,pentester_id):
             pivot_server_id = pivot_complete.id
 
         web_server_db = web_server_manager.get_web_server_byhostname(web_server)
-        if (web_server_db):
+        if web_server_db:
             web_server_id = web_server_db.id
         else:
             web_server_manager.create_web_server(web_server_complete)
             web_server_id = web_server_complete.id
 
-
-
         # initialize the objects based on the user input
-
-
-
         web_application_complete = WebApplication(website_url, web_server_id)
         web_application_manager.create_web_application(web_application_complete)
-
-
 
         testing_subject = TestingSubject(web_application_complete.id, pivot_server_id, pentester_id,
                                          tunneling_method)
 
         # validate user input and create objects if they pass validation
         if validate_web_server(web_server_complete) and validate_web_application(web_application_complete) and validate_testing_subject(testing_subject) and validate_pivot(pivot_complete):
-
-
             testing_subject_manager.create_testing_subject(testing_subject)
             testing_subjects.append(testing_subject)
             testing_subject_counter += 1
@@ -609,11 +641,11 @@ def generate_arachni_hosts(number_of_hosts, sandbox_name):
     arachni_hosts = [None]
 
     # get arachni host which is defined in configuration file
-    default_arachni_host = arachni_host_manager.get_arachni_host_byhostname("10.10.10.4")
+    default_arachni_host = arachni_host_manager.get_arachni_host_byhostname("10.10.10.5")
 
     # if one arachni is needed, it is taken just from configuration file
     if (not default_arachni_host) and (int(number_of_hosts) == 1):
-        default_arachni_host = ArachniHost('10.10.10.4', 'pentester', 'pentest', 'arachni')
+        default_arachni_host = ArachniHost('10.10.10.5', 'pentester', 'pentest', 'arachni')
         arachni_host_manager.create_arachni_host(default_arachni_host,sandbox_name)
         arachni_hosts.append(default_arachni_host)
         arachni_hosts.remove(None)
@@ -621,7 +653,7 @@ def generate_arachni_hosts(number_of_hosts, sandbox_name):
 
     # if more than one arachni is needed use the one in configuration file and generate the rest of them
     elif (not default_arachni_host) and (int(number_of_hosts) > 1):
-        default_arachni_host = ArachniHost('10.10.10.4', 'pentester', 'pentest', 'arachni')
+        default_arachni_host = ArachniHost('10.10.10.5', 'pentester', 'pentest', 'arachni')
         arachni_host_manager.create_arachni_host(default_arachni_host, sandbox_name)
         arachni_hosts.append(default_arachni_host)
         hostname = ''
@@ -689,24 +721,37 @@ def send_notification(smtp_server, smtp_username, smtp_password, from_address, t
 # main method
 def main():
     # check the correct number of parameters
-    if len(sys.argv[1:]) < 1:
+    if len(sys.argv[1:]) <= 1 :
         help()
         sys.exit(1)
 
     # definition of basic variables
-    smn_username = ''
-    smn_password = ''
+    smn_username = 'root'
+    smn_password = '<SMNPASS>'
     port = 22
     number_of_websites = ''
     sandbox_name = ''
     user_email = ''
-    smtp_server = SMTPServer("smtp.gmail.com", "kypotesting@gmail.com", "", "kypotesting@gmail.com")
+    modules = ''
+    smtp_server = SMTPServer("smtp.gmail.com", "kypotesting@gmail.com", "<EMAILPASS>", "kypotesting@gmail.com")
 
     # parse command line options
     try:
-        options = getopt.getopt(sys.argv[1:],"n:h:s:u:", ["number_of_websites", "help_manual", "sandbox_name", "user_email"])[0]
+        options = getopt.getopt(sys.argv[1:],"n:h:s:u:m:", ["number_of_websites", "help_manual", "sandbox_name", "user_email", "modules"])[0]
     except getopt.GetoptError as err:
         print str(err)
+        help()
+        sys.exit(1)
+
+    try:
+        verify_options = [None]
+        verify_options.append(options[1][0])
+        verify_options.append(options[1][0])
+        verify_options.append(options[2][0])
+        if '-n' not in verify_options and '-u' not in verify_options and '-s' not in verify_options:
+            help()
+            sys.exit(1)
+    except:
         help()
         sys.exit(1)
 
@@ -722,7 +767,8 @@ def main():
                 print "\n"
                 help()
                 sys.exit(1)
-
+        elif option[0] in '-m':
+            modules = option[1]
         elif option[0] in '-n':
             number_of_websites = option[1]
             if not int_try_parse(number_of_websites):
@@ -799,7 +845,7 @@ def main():
     # perform penetration test
     for x in range (0, len(arachni_clients)):
         # establish multiple threads
-        t = threading.Thread(target=perform_test, args=(arachni_clients[x], testing_subjects[x], smn_client, smn_host, port, smtp_server, pentester, q,))
+        t = threading.Thread(target=perform_test, args=(arachni_clients[x], testing_subjects[x], smn_client, smn_host, port, smtp_server, pentester, modules, q,))
         t.daemon = True
         t.start()
 
@@ -812,7 +858,7 @@ def main():
 
     # check if there is active arachni host, if not delete sandbox
     if not arachni_host_manager.get_arachni_host_username("pentester"):
-        #sandbox_manager.delete_sandbox(sandbox_name)
+        sandbox_manager.delete_sandbox(sandbox_name)
         print "[+] Sandbox was deleted [+]"
     else:
         print "[!] Sandbox cannot be deleted. Active Arachni hosts found [!]"
