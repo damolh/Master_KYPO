@@ -197,7 +197,7 @@ class ArachniHostManager:
         self.s = s
 
     def create_arachni_host(self, arachni_host, sandbox_name):
-        if arachni_host.hostname == "10.10.10.5":
+        if arachni_host.hostname == "10.10.10.4":
             s.add(arachni_host)
             s.commit()
         else:
@@ -641,11 +641,11 @@ def generate_arachni_hosts(number_of_hosts, sandbox_name):
     arachni_hosts = [None]
 
     # get arachni host which is defined in configuration file
-    default_arachni_host = arachni_host_manager.get_arachni_host_byhostname("10.10.10.5")
+    default_arachni_host = arachni_host_manager.get_arachni_host_byhostname("10.10.10.4")
 
     # if one arachni is needed, it is taken just from configuration file
     if (not default_arachni_host) and (int(number_of_hosts) == 1):
-        default_arachni_host = ArachniHost('10.10.10.5', 'pentester', 'pentest', 'arachni')
+        default_arachni_host = ArachniHost('10.10.10.4', 'pentester', 'pentest', 'arachni')
         arachni_host_manager.create_arachni_host(default_arachni_host,sandbox_name)
         arachni_hosts.append(default_arachni_host)
         arachni_hosts.remove(None)
@@ -653,7 +653,7 @@ def generate_arachni_hosts(number_of_hosts, sandbox_name):
 
     # if more than one arachni is needed use the one in configuration file and generate the rest of them
     elif (not default_arachni_host) and (int(number_of_hosts) > 1):
-        default_arachni_host = ArachniHost('10.10.10.5', 'pentester', 'pentest', 'arachni')
+        default_arachni_host = ArachniHost('10.10.10.4', 'pentester', 'pentest', 'arachni')
         arachni_host_manager.create_arachni_host(default_arachni_host, sandbox_name)
         arachni_hosts.append(default_arachni_host)
         hostname = ''
@@ -733,7 +733,7 @@ def main():
     sandbox_name = ''
     user_email = ''
     modules = ''
-    smtp_server = SMTPServer("smtp.gmail.com", "kypotesting@gmail.com", "<EMAILPASS>", "kypotesting@gmail.com")
+    smtp_server = SMTPServer("smtp.gmail.com", "kypotesting@gmail.com", "kypoarachni", "kypotesting@gmail.com")
 
     # parse command line options
     try:
